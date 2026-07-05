@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Three.js Map Walkthrough</title>
+  <style>
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: #0d1321;
+      color: #eef4ff;
+      font-family: Arial, sans-serif;
+    }
+
+    canvas {
+      display: block;
+    }
+
+    #hud {
+      position: fixed;
+      top: 16px;
+      left: 16px;
+      max-width: 360px;
+      padding: 12px 14px;
+      background: rgba(13, 19, 33, 0.72);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 10px;
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.24);
+      font-size: 14px;
+      line-height: 1.45;
+      user-select: none;
+      pointer-events: none;
+    }
+
+    #status {
+      margin-top: 6px;
+      color: #9ec8ff;
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <div id="hud">
+    <strong>3D Map Walkthrough</strong><br>
+    Move: WASD / Arrow keys<br>
+    Camera: drag mouse, scroll to zoom
+    <div id="status">Loading ./assets/map_replica.gltf...</div>
+  </div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.166.1/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.166.1/examples/jsm/"
+      }
+    }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+    const MAP_URL = './assets/map_replica.gltf';
+    const TARGET_MAP_SIZE = 80;
+    const PLAYER_RADIUS = 0.35;
+    const PLAYER_HEIGHT = 1.8;
+    const PLAYER_SPEED = 6.0;
+    const RAYCAST_HEIGHT = 80;
+    const MAX_STEP_HEIGHT = 1.25;
+    const CAMERA_MIN_DISTANCE = 3.5;
+    const CAMERA_MAX_DISTANCE = 16;
+
+    const statusEl = document.getElementById('status');
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x88b7e8);
+    scene.fog = new THREE.Fog(0x88b7e8, 90, 180);
+
+    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    document.body.appendChild(renderer.domElement);
+
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.45);
+    scene.add(ambientLight);
+
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 1.8);
+    directionalLight.position.set(24, 42, 18);
+    directionalLight.castShadow = true;
+    directionalLight.shadow.mapSize.set(2048, 2048);
+    directionalLight.shadow.camera.near = 1;
+    directionalLight.shadow.camera.far = 120;
+    directionalLight.shadow.camera.left = -70;
+    directionalLight.shadow.camera.right = 70;
+    directionalLight.shadow.camera.top = 70;
+    directionalLight.shadow.camera.bottom = -70;
+    scene.add(directionalLight);
+
+    const player = new THREE.Group();
+    player.position.set(0, PLAYER_HEIGHT / 2, 0);
+    scene.add(player);
+
+    const bodyGeometry = new THREE.CapsuleGeometry(PLAYER_RADIUS, PLAYER_HEIGHT - PLAYER_RADIUS * 2, 8, 16);
+    const bodyMaterial = new THREE.MeshStandardMaterial({
+      color: 0x2f80ed,
+      roughness: 0.55,
+      metalness: 0.05
+    });
+    const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+    body.castShadow = true;
+    body.position.y = 0;
+    player.add(body);
+
+    const faceGeometry = new THREE.SphereGeometry(0.08, 12, 8);
+    const faceMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff });
+    const face = new THREE.Mesh(faceGeometry, faceMaterial);
+    face.position.set(0, 0.36, PLAYER_RADIUS * 0.92);
+    player.add(face);
+
+    const fallbackGround = createFallbackGround();
+    scene.add(fallbackGround);
+
+    const raycaster = new THREE.Raycaster();
+    const downDirection = new THREE.Vector3(0, -1, 0);
+    const moveDirection = new THREE.Vector3();
+    const cameraForward = new THREE.Vector3();
+    const cameraRight = new THREE.Vector3();
+    const desiredPosition = new THREE.Vector3();
+    const cameraTarget = new THREE.Vector3();
+    const smoothedCameraTarget = new THREE.Vector3(0, PLAYER_HEIGHT * 0.6, 0);
+    const desiredCameraPosition = new THREE.Vector3();
+
+    const groundMeshes = [fallbackGround];
+    const keys = new Set();
+    const clock = new THREE.Clock();
+
+    let cameraYaw = Math.PI;
+    let cameraPitch = THREE.MathUtils.degToRad(26);
+    let cameraDistance = 8;
+    let isDraggingCamera = false;
+    let lastPointerX = 0;
+    let lastPointerY = 0;
+    let mapRoot = null;
+    let mapReady = false;
+
+    camera.position.set(0, 5, 8);
+    camera.lookAt(player.position);
+
+    loadEnvironment();
+    addInputHandlers();
+    animate();
+
+    function loadEnvironment() {
+      const loader = new GLTFLoader();
+
+      loader.load(
+        MAP_URL,
+        (gltf) => {
+          mapRoot = gltf.scene;
+          mapRoot.name = 'Loaded map replica';
+          scene.add(mapRoot);
+
+          normalizeMapToScene(mapRoot);
+
+          groundMeshes.length = 0;
+          mapRoot.traverse((object) => {
+            if (!object.isMesh) return;
+
+            object.castShadow = true;
+            object.receiveShadow = true;
+            setMaterialSide(object.material, THREE.DoubleSide);
+            object.geometry.computeBoundingBox();
+            groundMeshes.push(object);
+          });
+
+          mapRoot.updateMatrixWorld(true);
+          fallbackGround.visible = false;
+          mapReady = true;
+
+          placePlayerOnGround(0, 0);
+          statusEl.textContent = 'Map loaded. Walk around with WASD or arrow keys.';
+        },
+        undefined,
+        (error) => {
+          console.error('Could not load map replica:', error);
+          mapReady = false;
+          statusEl.textContent = 'Map could not be loaded; using fallback ground. Check ./assets/map_replica.gltf.';
+        }
+      );
+    }
+
+    function normalizeMapToScene(root) {
+      root.updateMatrixWorld(true);
+
+      const box = new THREE.Box3().setFromObject(root);
+      const size = box.getSize(new THREE.Vector3());
+      const center = box.getCenter(new THREE.Vector3());
+      const largestDimension = Math.max(size.x, size.y, size.z);
+      const scale = largestDimension > 0 ? TARGET_MAP_SIZE / largestDimension : 1;
+
+      root.scale.setScalar(scale);
+      root.position.sub(center.multiplyScalar(scale));
+      root.updateMatrixWorld(true);
+
+      const normalizedBox = new THREE.Box3().setFromObject(root);
+      root.position.y -= normalizedBox.min.y;
+      root.updateMatrixWorld(true);
+    }
+
+    function placePlayerOnGround(x, z) {
+      const hit = findGroundAt(x, z);
+
+      if (hit) {
+        player.position.set(x, hit.point.y + PLAYER_HEIGHT / 2, z);
+      } else {
+        player.position.set(x, PLAYER_HEIGHT / 2, z);
+      }
+    }
+
+    function findGroundAt(x, z) {
+      if (groundMeshes.length === 0) return null;
+
+      raycaster.set(new THREE.Vector3(x, RAYCAST_HEIGHT, z), downDirection);
+      raycaster.far = RAYCAST_HEIGHT * 2;
+
+      const hits = raycaster.intersectObjects(groundMeshes, false);
+      return hits.length > 0 ? hits[0] : null;
+    }
+
+    function createFallbackGround() {
+      const geometry = new THREE.PlaneGeometry(TARGET_MAP_SIZE, TARGET_MAP_SIZE, 40, 40);
+      geometry.rotateX(-Math.PI / 2);
+
+      const material = new THREE.MeshStandardMaterial({
+        color: 0x6f8f57,
+        roughness: 0.95
+      });
+
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.name = 'Fallback ground';
+      mesh.receiveShadow = true;
+      return mesh;
+    }
+
+    function setMaterialSide(material, side) {
+      if (Array.isArray(material)) {
+        material.forEach((entry) => setMaterialSide(entry, side));
+        return;
+      }
+
+      if (!material) return;
+
+      material.side = side;
+      material.needsUpdate = true;
+    }
+
+    function addInputHandlers() {
+      window.addEventListener('keydown', (event) => {
+        keys.add(event.key.toLowerCase());
+      });
+
+      window.addEventListener('keyup', (event) => {
+        keys.delete(event.key.toLowerCase());
+      });
+
+      renderer.domElement.addEventListener('pointerdown', (event) => {
+        isDraggingCamera = true;
+        lastPointerX = event.clientX;
+        lastPointerY = event.clientY;
+        renderer.domElement.setPointerCapture(event.pointerId);
+      });
+
+      renderer.domElement.addEventListener('pointermove', (event) => {
+        if (!isDraggingCamera) return;
+
+        const deltaX = event.clientX - lastPointerX;
+        const deltaY = event.clientY - lastPointerY;
+        lastPointerX = event.clientX;
+        lastPointerY = event.clientY;
+
+        cameraYaw -= deltaX * 0.006;
+        cameraPitch = THREE.MathUtils.clamp(
+          cameraPitch + deltaY * 0.004,
+          THREE.MathUtils.degToRad(-8),
+          THREE.MathUtils.degToRad(68)
+        );
+      });
+
+      renderer.domElement.addEventListener('pointerup', (event) => {
+        isDraggingCamera = false;
+        renderer.domElement.releasePointerCapture(event.pointerId);
+      });
+
+      renderer.domElement.addEventListener('wheel', (event) => {
+        event.preventDefault();
+        cameraDistance = THREE.MathUtils.clamp(
+          cameraDistance + event.deltaY * 0.01,
+          CAMERA_MIN_DISTANCE,
+          CAMERA_MAX_DISTANCE
+        );
+      }, { passive: false });
+
+      window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+    }
+
+    function updatePlayer(deltaTime) {
+      moveDirection.set(0, 0, 0);
+
+      camera.getWorldDirection(cameraForward);
+      cameraForward.y = 0;
+      cameraForward.normalize();
+
+      cameraRight.crossVectors(cameraForward, camera.up).normalize();
+
+      if (keys.has('w') || keys.has('arrowup')) moveDirection.add(cameraForward);
+      if (keys.has('s') || keys.has('arrowdown')) moveDirection.sub(cameraForward);
+      if (keys.has('a') || keys.has('arrowleft')) moveDirection.sub(cameraRight);
+      if (keys.has('d') || keys.has('arrowright')) moveDirection.add(cameraRight);
+
+      if (moveDirection.lengthSq() === 0) {
+        keepPlayerGrounded();
+        return;
+      }
+
+      moveDirection.normalize();
+      desiredPosition.copy(player.position).addScaledVector(moveDirection, PLAYER_SPEED * deltaTime);
+
+      const groundHit = findGroundAt(desiredPosition.x, desiredPosition.z);
+      if (!groundHit) {
+        keepPlayerGrounded();
+        return;
+      }
+
+      const currentGroundY = player.position.y - PLAYER_HEIGHT / 2;
+      const nextGroundY = groundHit.point.y;
+
+      // Refuse sudden vertical jumps; this keeps the avatar from snapping up walls or off the mesh.
+      if (Math.abs(nextGroundY - currentGroundY) <= MAX_STEP_HEIGHT || !mapReady) {
+        player.position.set(
+          desiredPosition.x,
+          nextGroundY + PLAYER_HEIGHT / 2,
+          desiredPosition.z
+        );
+
+        const targetYaw = Math.atan2(moveDirection.x, moveDirection.z);
+        player.rotation.y = dampAngle(player.rotation.y, targetYaw, 12, deltaTime);
+      } else {
+        keepPlayerGrounded();
+      }
+    }
+
+    function keepPlayerGrounded() {
+      const groundHit = findGroundAt(player.position.x, player.position.z);
+
+      if (groundHit) {
+        player.position.y = groundHit.point.y + PLAYER_HEIGHT / 2;
+      }
+    }
+
+    function updateCamera(deltaTime) {
+      cameraTarget.set(
+        player.position.x,
+        player.position.y + PLAYER_HEIGHT * 0.45,
+        player.position.z
+      );
+      smoothedCameraTarget.lerp(cameraTarget, 1 - Math.exp(-8 * deltaTime));
+
+      const horizontalDistance = Math.cos(cameraPitch) * cameraDistance;
+      desiredCameraPosition.set(
+        smoothedCameraTarget.x + Math.sin(cameraYaw) * horizontalDistance,
+        smoothedCameraTarget.y + Math.sin(cameraPitch) * cameraDistance,
+        smoothedCameraTarget.z + Math.cos(cameraYaw) * horizontalDistance
+      );
+
+      camera.position.lerp(desiredCameraPosition, 1 - Math.exp(-10 * deltaTime));
+      camera.lookAt(smoothedCameraTarget);
+    }
+
+    function dampAngle(current, target, smoothing, deltaTime) {
+      const delta = THREE.MathUtils.euclideanModulo(target - current + Math.PI, Math.PI * 2) - Math.PI;
+      return current + delta * (1 - Math.exp(-smoothing * deltaTime));
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      const deltaTime = Math.min(clock.getDelta(), 0.05);
+      updatePlayer(deltaTime);
+      updateCamera(deltaTime);
+      renderer.render(scene, camera);
+    }
+  </script>
+</body>
+</html>
