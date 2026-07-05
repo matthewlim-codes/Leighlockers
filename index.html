@@ -57,6 +57,7 @@
       display: flex;
       align-items: center;
       gap: 8px;
+      flex-wrap: wrap;
       max-width: 430px;
       padding: 8px;
       background: rgba(13, 19, 33, 0.66);
@@ -200,8 +201,9 @@
     <div id="status">Loading uploaded GLTF ZIP...</div>
   </div>
   <div id="surface-panel" aria-label="Walkable surface selector">
-    <div id="surface-label">Walk layer: Hallway</div>
-    <button class="surface-button is-active" type="button" data-surface-mode="hallway">Hallway</button>
+    <div id="surface-label">Walk layer: Ground</div>
+    <button class="surface-button is-active" type="button" data-surface-mode="ground">Ground</button>
+    <button class="surface-button" type="button" data-surface-mode="hallway">Hallway</button>
     <button class="surface-button" type="button" data-surface-mode="roof">Roof</button>
   </div>
   <div id="mobile-controls" aria-label="Mobile touch controls">
@@ -242,6 +244,7 @@
     const JOYSTICK_DEAD_ZONE = 0.12;
     const LOOK_SENSITIVITY_X = 0.008;
     const LOOK_SENSITIVITY_Y = 0.005;
+    const SURFACE_GROUND = 'ground';
     const SURFACE_HALLWAY = 'hallway';
     const SURFACE_ROOF = 'roof';
     const ROOF_HEIGHT_RATIO = 0.58;
@@ -331,7 +334,7 @@
     let lastLookY = 0;
     let mapRoot = null;
     let mapReady = false;
-    let activeSurfaceMode = SURFACE_HALLWAY;
+    let activeSurfaceMode = SURFACE_GROUND;
     let surfaceMinY = 0;
     let surfaceMaxY = 0;
     let roofCutoffY = Number.POSITIVE_INFINITY;
@@ -374,7 +377,7 @@
 
       placePlayerAtSpawn();
       updateSurfaceUi();
-      statusEl.textContent = 'Map loaded. Use Hallway mode to stay below roof geometry.';
+      statusEl.textContent = 'Map loaded. Ground mode keeps you below rooftops.';
     }
 
     async function loadMapArchive(url) {
@@ -552,7 +555,7 @@
     }
 
     function placePlayerAtSpawn() {
-      const spawnHit = findGroundAt(0, 0) || findNearestGroundAroundCenter();
+      const spawnHit = findGroundAt(0, 0) || findNearestGroundAround(0, 0);
 
       if (spawnHit) {
         player.position.set(spawnHit.point.x, spawnHit.point.y + PLAYER_HEIGHT / 2, spawnHit.point.z);
@@ -561,7 +564,18 @@
       }
     }
 
-    function findNearestGroundAroundCenter() {
+    function placePlayerOnSelectedLayer() {
+      const hit = findGroundAt(player.position.x, player.position.z)
+        || findNearestGroundAround(player.position.x, player.position.z)
+        || findGroundAt(0, 0)
+        || findNearestGroundAround(0, 0);
+
+      if (hit) {
+        player.position.set(hit.point.x, hit.point.y + PLAYER_HEIGHT / 2, hit.point.z);
+      }
+    }
+
+    function findNearestGroundAround(originX, originZ) {
       const maxRadius = TARGET_MAP_SIZE * 0.45;
       const radiusStep = 2;
       const samplesPerRing = 24;
@@ -569,7 +583,10 @@
       for (let radius = radiusStep; radius <= maxRadius; radius += radiusStep) {
         for (let sample = 0; sample < samplesPerRing; sample += 1) {
           const angle = (sample / samplesPerRing) * Math.PI * 2;
-          const hit = findGroundAt(Math.cos(angle) * radius, Math.sin(angle) * radius);
+          const hit = findGroundAt(
+            originX + Math.cos(angle) * radius,
+            originZ + Math.sin(angle) * radius
+          );
 
           if (hit) return hit;
         }
@@ -589,6 +606,18 @@
     }
 
     function selectSurfaceHit(hits, mode) {
+      const walkableHits = hits.filter((hit) => isWalkableSurface(hit));
+
+      if (mode === SURFACE_GROUND) {
+        for (let index = walkableHits.length - 1; index >= 0; index -= 1) {
+          if (walkableHits[index].point.y < roofCutoffY) {
+            return walkableHits[index];
+          }
+        }
+
+        return null;
+      }
+
       for (const hit of hits) {
         if (!isWalkableSurface(hit)) continue;
 
@@ -798,15 +827,20 @@
     }
 
     function setSurfaceMode(mode) {
-      if (![SURFACE_HALLWAY, SURFACE_ROOF].includes(mode) || mode === activeSurfaceMode) return;
+      if (![SURFACE_GROUND, SURFACE_HALLWAY, SURFACE_ROOF].includes(mode) || mode === activeSurfaceMode) return;
 
       activeSurfaceMode = mode;
       updateSurfaceUi();
-      placePlayerAtSpawn();
+      placePlayerOnSelectedLayer();
     }
 
     function updateSurfaceUi() {
-      const label = activeSurfaceMode === SURFACE_ROOF ? 'Roof' : 'Hallway';
+      const labels = {
+        [SURFACE_GROUND]: 'Ground',
+        [SURFACE_HALLWAY]: 'Hallway',
+        [SURFACE_ROOF]: 'Roof'
+      };
+      const label = labels[activeSurfaceMode] || 'Ground';
       const cutoffText = Number.isFinite(roofCutoffY) ? ` cutoff ${roofCutoffY.toFixed(1)}m` : '';
       surfaceLabelEl.textContent = `Walk layer: ${label}${cutoffText}`;
 
