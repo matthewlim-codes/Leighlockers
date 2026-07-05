@@ -48,12 +48,13 @@
     <strong>3D Map Walkthrough</strong><br>
     Move: WASD / Arrow keys<br>
     Camera: drag mouse, scroll to zoom
-    <div id="status">Loading ./assets/map_replica.gltf...</div>
+    <div id="status">Loading uploaded GLTF ZIP...</div>
   </div>
 
   <script type="importmap">
     {
       "imports": {
+        "jszip": "https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm",
         "three": "https://unpkg.com/three@0.166.1/build/three.module.js",
         "three/addons/": "https://unpkg.com/three@0.166.1/examples/jsm/"
       }
@@ -61,9 +62,11 @@
   </script>
 
   <script type="module">
+    import JSZip from 'jszip';
     import * as THREE from 'three';
     import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
+    const MAP_ZIP_URL = './a5c9110e60d2_gltf.zip';
     const MAP_URL = './assets/map_replica.gltf';
     const TARGET_MAP_SIZE = 80;
     const PLAYER_RADIUS = 0.35;
@@ -158,43 +161,175 @@
     addInputHandlers();
     animate();
 
-    function loadEnvironment() {
+    async function loadEnvironment() {
+      try {
+        statusEl.textContent = `Loading ${MAP_ZIP_URL}...`;
+        mapRoot = await loadMapArchive(MAP_ZIP_URL);
+      } catch (zipError) {
+        console.warn('Could not load zipped map replica; trying legacy GLTF path.', zipError);
+
+        try {
+          statusEl.textContent = `Loading ${MAP_URL}...`;
+          mapRoot = await loadSingleGltf(MAP_URL);
+        } catch (gltfError) {
+          console.error('Could not load map replica:', gltfError);
+          mapReady = false;
+          statusEl.textContent = 'Map could not be loaded; using fallback ground. Check the uploaded ZIP or ./assets/map_replica.gltf.';
+          return;
+        }
+      }
+
+      mapRoot.name = 'Loaded map replica';
+      scene.add(mapRoot);
+
+      normalizeMapToScene(mapRoot);
+      registerGroundMeshes(mapRoot);
+
+      mapRoot.updateMatrixWorld(true);
+      fallbackGround.visible = false;
+      mapReady = true;
+
+      placePlayerAtSpawn();
+      statusEl.textContent = 'Map loaded. Walk around with WASD or arrow keys.';
+    }
+
+    async function loadMapArchive(url) {
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch ${url}: ${response.status} ${response.statusText}`);
+      }
+
+      const zip = await JSZip.loadAsync(await response.arrayBuffer());
+      const gltfFiles = Object.values(zip.files)
+        .filter((file) => !file.dir && file.name.toLowerCase().endsWith('.gltf'))
+        .sort((a, b) => naturalCompare(a.name, b.name));
+
+      if (gltfFiles.length === 0) {
+        throw new Error(`No .gltf files found in ${url}`);
+      }
+
+      const archiveUrls = await createArchiveObjectUrls(zip);
+      const manager = new THREE.LoadingManager();
+      manager.setURLModifier((assetUrl) => resolveArchiveUrl(assetUrl, archiveUrls.urls));
+
+      const loader = new GLTFLoader(manager);
+      const root = new THREE.Group();
+      root.name = 'Loaded map replica archive';
+
+      try {
+        for (let index = 0; index < gltfFiles.length; index += 1) {
+          const gltfFile = gltfFiles[index];
+          statusEl.textContent = `Loading map chunk ${index + 1} of ${gltfFiles.length}...`;
+
+          const gltfText = await gltfFile.async('text');
+          const gltf = await parseGltf(loader, gltfText);
+          gltf.scene.name = gltfFile.name;
+          root.add(gltf.scene);
+        }
+      } finally {
+        archiveUrls.revoke();
+      }
+
+      return root;
+    }
+
+    function loadSingleGltf(url) {
       const loader = new GLTFLoader();
 
-      loader.load(
-        MAP_URL,
-        (gltf) => {
-          mapRoot = gltf.scene;
-          mapRoot.name = 'Loaded map replica';
-          scene.add(mapRoot);
+      return new Promise((resolve, reject) => {
+        loader.load(url, (gltf) => resolve(gltf.scene), undefined, reject);
+      });
+    }
 
-          normalizeMapToScene(mapRoot);
+    function parseGltf(loader, gltfText) {
+      return new Promise((resolve, reject) => {
+        loader.parse(gltfText, '', resolve, reject);
+      });
+    }
 
-          groundMeshes.length = 0;
-          mapRoot.traverse((object) => {
-            if (!object.isMesh) return;
+    async function createArchiveObjectUrls(zip) {
+      const urls = new Map();
+      const objectUrls = new Set();
+      const files = Object.values(zip.files).filter((file) => !file.dir);
 
-            object.castShadow = true;
-            object.receiveShadow = true;
-            setMaterialSide(object.material, THREE.DoubleSide);
-            object.geometry.computeBoundingBox();
-            groundMeshes.push(object);
-          });
+      await Promise.all(files.map(async (file) => {
+        const buffer = await file.async('arraybuffer');
+        const objectUrl = URL.createObjectURL(new Blob([buffer], { type: getMimeType(file.name) }));
+        const normalizedName = normalizeArchivePath(file.name);
+        const basename = normalizedName.split('/').pop();
 
-          mapRoot.updateMatrixWorld(true);
-          fallbackGround.visible = false;
-          mapReady = true;
+        urls.set(normalizedName, objectUrl);
+        urls.set(`./${normalizedName}`, objectUrl);
+        if (basename) urls.set(basename, objectUrl);
 
-          placePlayerOnGround(0, 0);
-          statusEl.textContent = 'Map loaded. Walk around with WASD or arrow keys.';
-        },
-        undefined,
-        (error) => {
-          console.error('Could not load map replica:', error);
-          mapReady = false;
-          statusEl.textContent = 'Map could not be loaded; using fallback ground. Check ./assets/map_replica.gltf.';
+        objectUrls.add(objectUrl);
+      }));
+
+      return {
+        urls,
+        revoke() {
+          objectUrls.forEach((objectUrl) => URL.revokeObjectURL(objectUrl));
         }
-      );
+      };
+    }
+
+    function resolveArchiveUrl(assetUrl, urls) {
+      const normalizedUrl = normalizeArchivePath(assetUrl);
+      const basename = normalizedUrl.split('/').pop();
+
+      return urls.get(normalizedUrl) || urls.get(`./${normalizedUrl}`) || urls.get(basename) || assetUrl;
+    }
+
+    function normalizeArchivePath(path) {
+      return safeDecodeURIComponent(path)
+        .split(/[?#]/)[0]
+        .replace(/\\/g, '/')
+        .replace(/^\.\//, '');
+    }
+
+    function safeDecodeURIComponent(value) {
+      try {
+        return decodeURIComponent(value);
+      } catch {
+        return value;
+      }
+    }
+
+    function getMimeType(path) {
+      const extension = path.split('.').pop().toLowerCase();
+
+      switch (extension) {
+        case 'bin':
+          return 'application/octet-stream';
+        case 'gltf':
+          return 'model/gltf+json';
+        case 'jpg':
+        case 'jpeg':
+          return 'image/jpeg';
+        case 'png':
+          return 'image/png';
+        case 'webp':
+          return 'image/webp';
+        default:
+          return 'application/octet-stream';
+      }
+    }
+
+    function naturalCompare(a, b) {
+      return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+    }
+
+    function registerGroundMeshes(root) {
+      groundMeshes.length = 0;
+      root.traverse((object) => {
+        if (!object.isMesh) return;
+
+        object.castShadow = true;
+        object.receiveShadow = true;
+        setMaterialSide(object.material, THREE.DoubleSide);
+        object.geometry.computeBoundingBox();
+        groundMeshes.push(object);
+      });
     }
 
     function normalizeMapToScene(root) {
@@ -223,6 +358,33 @@
       } else {
         player.position.set(x, PLAYER_HEIGHT / 2, z);
       }
+    }
+
+    function placePlayerAtSpawn() {
+      const spawnHit = findGroundAt(0, 0) || findNearestGroundAroundCenter();
+
+      if (spawnHit) {
+        player.position.set(spawnHit.point.x, spawnHit.point.y + PLAYER_HEIGHT / 2, spawnHit.point.z);
+      } else {
+        placePlayerOnGround(0, 0);
+      }
+    }
+
+    function findNearestGroundAroundCenter() {
+      const maxRadius = TARGET_MAP_SIZE * 0.45;
+      const radiusStep = 2;
+      const samplesPerRing = 24;
+
+      for (let radius = radiusStep; radius <= maxRadius; radius += radiusStep) {
+        for (let sample = 0; sample < samplesPerRing; sample += 1) {
+          const angle = (sample / samplesPerRing) * Math.PI * 2;
+          const hit = findGroundAt(Math.cos(angle) * radius, Math.sin(angle) * radius);
+
+          if (hit) return hit;
+        }
+      }
+
+      return null;
     }
 
     function findGroundAt(x, z) {
