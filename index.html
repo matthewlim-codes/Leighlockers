@@ -2,8 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Three.js Map Walkthrough</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <title>Mobile 3D Map Walkthrough</title>
   <style>
     html,
     body {
@@ -11,44 +11,148 @@
       height: 100%;
       margin: 0;
       overflow: hidden;
+      position: fixed;
+      overscroll-behavior: none;
       background: #0d1321;
       color: #eef4ff;
       font-family: Arial, sans-serif;
+      touch-action: none;
     }
 
     canvas {
       display: block;
+      touch-action: none;
     }
 
     #hud {
       position: fixed;
-      top: 16px;
-      left: 16px;
-      max-width: 360px;
-      padding: 12px 14px;
+      top: max(12px, env(safe-area-inset-top));
+      left: max(12px, env(safe-area-inset-left));
+      right: calc(max(12px, env(safe-area-inset-right)) + 56px);
+      max-width: 420px;
+      padding: 10px 12px;
       background: rgba(13, 19, 33, 0.72);
       border: 1px solid rgba(255, 255, 255, 0.14);
-      border-radius: 10px;
+      border-radius: 14px;
       box-shadow: 0 8px 28px rgba(0, 0, 0, 0.24);
-      font-size: 14px;
+      font-size: clamp(12px, 3.2vw, 15px);
       line-height: 1.45;
       user-select: none;
       pointer-events: none;
+      z-index: 5;
     }
 
     #status {
       margin-top: 6px;
       color: #9ec8ff;
-      font-size: 13px;
+      font-size: clamp(11px, 3vw, 13px);
+    }
+
+    #mobile-controls {
+      position: fixed;
+      inset: 0;
+      z-index: 4;
+      pointer-events: none;
+      touch-action: none;
+      user-select: none;
+    }
+
+    #joystick {
+      position: absolute;
+      left: max(20px, env(safe-area-inset-left));
+      bottom: max(22px, env(safe-area-inset-bottom));
+      width: min(34vw, 150px);
+      height: min(34vw, 150px);
+      min-width: 112px;
+      min-height: 112px;
+      border-radius: 50%;
+      background: rgba(8, 14, 26, 0.34);
+      border: 2px solid rgba(255, 255, 255, 0.28);
+      box-shadow: inset 0 0 28px rgba(255, 255, 255, 0.08), 0 12px 34px rgba(0, 0, 0, 0.28);
+      pointer-events: auto;
+      touch-action: none;
+    }
+
+    #joystick-knob {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 46%;
+      height: 46%;
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(158, 200, 255, 0.74);
+      border: 2px solid rgba(255, 255, 255, 0.68);
+      box-shadow: 0 8px 22px rgba(0, 0, 0, 0.26);
+    }
+
+    #look-zone {
+      position: absolute;
+      right: max(12px, env(safe-area-inset-right));
+      bottom: max(22px, env(safe-area-inset-bottom));
+      width: min(42vw, 190px);
+      height: min(32vw, 140px);
+      min-width: 132px;
+      min-height: 96px;
+      border-radius: 22px;
+      background: rgba(8, 14, 26, 0.2);
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      color: rgba(238, 244, 255, 0.72);
+      display: grid;
+      place-items: center;
+      font-size: clamp(11px, 2.8vw, 13px);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      pointer-events: auto;
+      touch-action: none;
+    }
+
+    #fullscreen-button {
+      position: absolute;
+      top: max(12px, env(safe-area-inset-top));
+      right: max(12px, env(safe-area-inset-right));
+      width: 44px;
+      height: 44px;
+      border: 1px solid rgba(255, 255, 255, 0.24);
+      border-radius: 14px;
+      background: rgba(13, 19, 33, 0.72);
+      color: #eef4ff;
+      font-size: 22px;
+      line-height: 1;
+      pointer-events: auto;
+      touch-action: manipulation;
+    }
+
+    @media (orientation: landscape) and (max-height: 520px) {
+      #hud {
+        max-width: 340px;
+      }
+
+      #joystick {
+        width: min(26vw, 132px);
+        height: min(26vw, 132px);
+      }
+
+      #look-zone {
+        width: min(34vw, 176px);
+        height: min(24vw, 116px);
+      }
     }
   </style>
 </head>
 <body>
   <div id="hud">
-    <strong>3D Map Walkthrough</strong><br>
-    Move: WASD / Arrow keys<br>
-    Camera: drag mouse, scroll to zoom
+    <strong>Mobile 3D Map Walkthrough</strong><br>
+    Left thumbstick: move<br>
+    Right touch pad: look around
     <div id="status">Loading uploaded GLTF ZIP...</div>
+  </div>
+  <div id="mobile-controls" aria-label="Mobile touch controls">
+    <button id="fullscreen-button" type="button" aria-label="Enter fullscreen">[]</button>
+    <div id="joystick" aria-label="Move player">
+      <div id="joystick-knob"></div>
+    </div>
+    <div id="look-zone" aria-label="Look around">Swipe to look</div>
   </div>
 
   <script type="importmap">
@@ -76,8 +180,16 @@
     const MAX_STEP_HEIGHT = 1.25;
     const CAMERA_MIN_DISTANCE = 3.5;
     const CAMERA_MAX_DISTANCE = 16;
+    const MOBILE_MAX_PIXEL_RATIO = 1.5;
+    const JOYSTICK_DEAD_ZONE = 0.12;
+    const LOOK_SENSITIVITY_X = 0.008;
+    const LOOK_SENSITIVITY_Y = 0.005;
 
     const statusEl = document.getElementById('status');
+    const joystickEl = document.getElementById('joystick');
+    const joystickKnobEl = document.getElementById('joystick-knob');
+    const lookZoneEl = document.getElementById('look-zone');
+    const fullscreenButtonEl = document.getElementById('fullscreen-button');
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x88b7e8);
@@ -86,8 +198,7 @@
     const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.setSize(window.innerWidth, window.innerHeight);
+    resizeRenderer();
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     document.body.appendChild(renderer.domElement);
@@ -140,6 +251,7 @@
     const cameraTarget = new THREE.Vector3();
     const smoothedCameraTarget = new THREE.Vector3(0, PLAYER_HEIGHT * 0.6, 0);
     const desiredCameraPosition = new THREE.Vector3();
+    const joystickVector = new THREE.Vector2();
 
     const groundMeshes = [fallbackGround];
     const keys = new Set();
@@ -147,10 +259,11 @@
 
     let cameraYaw = Math.PI;
     let cameraPitch = THREE.MathUtils.degToRad(26);
-    let cameraDistance = 8;
-    let isDraggingCamera = false;
-    let lastPointerX = 0;
-    let lastPointerY = 0;
+    let cameraDistance = 7;
+    let joystickPointerId = null;
+    let lookPointerId = null;
+    let lastLookX = 0;
+    let lastLookY = 0;
     let mapRoot = null;
     let mapReady = false;
 
@@ -190,7 +303,7 @@
       mapReady = true;
 
       placePlayerAtSpawn();
-      statusEl.textContent = 'Map loaded. Walk around with WASD or arrow keys.';
+      statusEl.textContent = 'Map loaded. Use the left thumbstick to walk and the right pad to look.';
     }
 
     async function loadMapArchive(url) {
@@ -427,54 +540,157 @@
     function addInputHandlers() {
       window.addEventListener('keydown', (event) => {
         keys.add(event.key.toLowerCase());
+        if (isMovementKey(event.key)) event.preventDefault();
       });
 
       window.addEventListener('keyup', (event) => {
         keys.delete(event.key.toLowerCase());
+        if (isMovementKey(event.key)) event.preventDefault();
       });
 
+      joystickEl.addEventListener('pointerdown', (event) => {
+        event.preventDefault();
+        joystickPointerId = event.pointerId;
+        joystickEl.setPointerCapture(event.pointerId);
+        updateJoystickFromPointer(event);
+      });
+
+      joystickEl.addEventListener('pointermove', (event) => {
+        if (event.pointerId !== joystickPointerId) return;
+
+        event.preventDefault();
+        updateJoystickFromPointer(event);
+      });
+
+      joystickEl.addEventListener('pointerup', resetJoystick);
+      joystickEl.addEventListener('pointercancel', resetJoystick);
+
+      lookZoneEl.addEventListener('pointerdown', (event) => {
+        event.preventDefault();
+        lookPointerId = event.pointerId;
+        lastLookX = event.clientX;
+        lastLookY = event.clientY;
+        lookZoneEl.setPointerCapture(event.pointerId);
+      });
+
+      lookZoneEl.addEventListener('pointermove', (event) => {
+        if (event.pointerId !== lookPointerId) return;
+
+        event.preventDefault();
+        rotateCameraFromPointer(event.clientX - lastLookX, event.clientY - lastLookY);
+        lastLookX = event.clientX;
+        lastLookY = event.clientY;
+      });
+
+      lookZoneEl.addEventListener('pointerup', resetLookPointer);
+      lookZoneEl.addEventListener('pointercancel', resetLookPointer);
+
       renderer.domElement.addEventListener('pointerdown', (event) => {
-        isDraggingCamera = true;
-        lastPointerX = event.clientX;
-        lastPointerY = event.clientY;
+        if (event.clientX < window.innerWidth * 0.45) return;
+
+        event.preventDefault();
+        lookPointerId = event.pointerId;
+        lastLookX = event.clientX;
+        lastLookY = event.clientY;
         renderer.domElement.setPointerCapture(event.pointerId);
       });
 
       renderer.domElement.addEventListener('pointermove', (event) => {
-        if (!isDraggingCamera) return;
+        if (event.pointerId !== lookPointerId) return;
 
-        const deltaX = event.clientX - lastPointerX;
-        const deltaY = event.clientY - lastPointerY;
-        lastPointerX = event.clientX;
-        lastPointerY = event.clientY;
-
-        cameraYaw -= deltaX * 0.006;
-        cameraPitch = THREE.MathUtils.clamp(
-          cameraPitch + deltaY * 0.004,
-          THREE.MathUtils.degToRad(-8),
-          THREE.MathUtils.degToRad(68)
-        );
-      });
-
-      renderer.domElement.addEventListener('pointerup', (event) => {
-        isDraggingCamera = false;
-        renderer.domElement.releasePointerCapture(event.pointerId);
-      });
-
-      renderer.domElement.addEventListener('wheel', (event) => {
         event.preventDefault();
-        cameraDistance = THREE.MathUtils.clamp(
-          cameraDistance + event.deltaY * 0.01,
-          CAMERA_MIN_DISTANCE,
-          CAMERA_MAX_DISTANCE
-        );
-      }, { passive: false });
+        rotateCameraFromPointer(event.clientX - lastLookX, event.clientY - lastLookY);
+        lastLookX = event.clientX;
+        lastLookY = event.clientY;
+      });
+
+      renderer.domElement.addEventListener('pointerup', resetLookPointer);
+      renderer.domElement.addEventListener('pointercancel', resetLookPointer);
+
+      fullscreenButtonEl.addEventListener('click', async () => {
+        try {
+          if (!document.fullscreenElement) {
+            await document.documentElement.requestFullscreen();
+          } else {
+            await document.exitFullscreen();
+          }
+        } catch (error) {
+          console.warn('Fullscreen request failed:', error);
+        }
+      });
+
+      window.addEventListener('contextmenu', (event) => {
+        event.preventDefault();
+      });
 
       window.addEventListener('resize', () => {
-        camera.aspect = window.innerWidth / window.innerHeight;
-        camera.updateProjectionMatrix();
-        renderer.setSize(window.innerWidth, window.innerHeight);
+        resizeRenderer();
       });
+    }
+
+    function updateJoystickFromPointer(event) {
+      const rect = joystickEl.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      const maxDistance = rect.width * 0.36;
+      const rawX = event.clientX - centerX;
+      const rawY = event.clientY - centerY;
+      const distance = Math.min(Math.hypot(rawX, rawY), maxDistance);
+      const angle = Math.atan2(rawY, rawX);
+      const knobX = Math.cos(angle) * distance;
+      const knobY = Math.sin(angle) * distance;
+
+      joystickVector.set(knobX / maxDistance, -knobY / maxDistance);
+
+      if (joystickVector.length() < JOYSTICK_DEAD_ZONE) {
+        joystickVector.set(0, 0);
+      }
+
+      joystickKnobEl.style.transform = `translate(calc(-50% + ${knobX}px), calc(-50% + ${knobY}px))`;
+    }
+
+    function resetJoystick(event) {
+      if (event.pointerId !== joystickPointerId) return;
+
+      event.preventDefault();
+      joystickPointerId = null;
+      joystickVector.set(0, 0);
+      joystickKnobEl.style.transform = 'translate(-50%, -50%)';
+
+      if (joystickEl.hasPointerCapture(event.pointerId)) {
+        joystickEl.releasePointerCapture(event.pointerId);
+      }
+    }
+
+    function rotateCameraFromPointer(deltaX, deltaY) {
+      cameraYaw -= deltaX * LOOK_SENSITIVITY_X;
+      cameraPitch = THREE.MathUtils.clamp(
+        cameraPitch + deltaY * LOOK_SENSITIVITY_Y,
+        THREE.MathUtils.degToRad(-10),
+        THREE.MathUtils.degToRad(70)
+      );
+    }
+
+    function resetLookPointer(event) {
+      if (event.pointerId !== lookPointerId) return;
+
+      event.preventDefault();
+      lookPointerId = null;
+
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+    }
+
+    function resizeRenderer() {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, MOBILE_MAX_PIXEL_RATIO));
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    function isMovementKey(key) {
+      return ['w', 'a', 's', 'd', 'arrowup', 'arrowleft', 'arrowdown', 'arrowright'].includes(key.toLowerCase());
     }
 
     function updatePlayer(deltaTime) {
@@ -490,6 +706,10 @@
       if (keys.has('s') || keys.has('arrowdown')) moveDirection.sub(cameraForward);
       if (keys.has('a') || keys.has('arrowleft')) moveDirection.sub(cameraRight);
       if (keys.has('d') || keys.has('arrowright')) moveDirection.add(cameraRight);
+      if (joystickVector.lengthSq() > 0) {
+        moveDirection.addScaledVector(cameraForward, joystickVector.y);
+        moveDirection.addScaledVector(cameraRight, joystickVector.x);
+      }
 
       if (moveDirection.lengthSq() === 0) {
         keepPlayerGrounded();
