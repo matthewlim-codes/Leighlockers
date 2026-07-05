@@ -48,6 +48,52 @@
       font-size: clamp(11px, 3vw, 13px);
     }
 
+    #surface-panel {
+      position: fixed;
+      left: max(12px, env(safe-area-inset-left));
+      right: max(12px, env(safe-area-inset-right));
+      bottom: calc(max(22px, env(safe-area-inset-bottom)) + min(34vw, 150px) + 14px);
+      z-index: 5;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      max-width: 430px;
+      padding: 8px;
+      background: rgba(13, 19, 33, 0.66);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 16px;
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.22);
+      pointer-events: auto;
+      touch-action: manipulation;
+      user-select: none;
+    }
+
+    #surface-label {
+      flex: 1;
+      min-width: 0;
+      color: #dcecff;
+      font-size: clamp(11px, 3vw, 13px);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .surface-button {
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      border-radius: 12px;
+      padding: 8px 10px;
+      background: rgba(255, 255, 255, 0.1);
+      color: #eef4ff;
+      font: inherit;
+      font-size: clamp(11px, 3vw, 13px);
+    }
+
+    .surface-button.is-active {
+      background: rgba(158, 200, 255, 0.86);
+      color: #0d1321;
+      border-color: rgba(255, 255, 255, 0.76);
+    }
+
     #mobile-controls {
       position: fixed;
       inset: 0;
@@ -128,6 +174,12 @@
         max-width: 340px;
       }
 
+      #surface-panel {
+        left: calc(max(20px, env(safe-area-inset-left)) + min(26vw, 132px) + 12px);
+        right: calc(max(12px, env(safe-area-inset-right)) + min(34vw, 176px) + 12px);
+        bottom: max(22px, env(safe-area-inset-bottom));
+      }
+
       #joystick {
         width: min(26vw, 132px);
         height: min(26vw, 132px);
@@ -146,6 +198,11 @@
     Left thumbstick: move<br>
     Right touch pad: look around
     <div id="status">Loading uploaded GLTF ZIP...</div>
+  </div>
+  <div id="surface-panel" aria-label="Walkable surface selector">
+    <div id="surface-label">Walk layer: Hallway</div>
+    <button class="surface-button is-active" type="button" data-surface-mode="hallway">Hallway</button>
+    <button class="surface-button" type="button" data-surface-mode="roof">Roof</button>
   </div>
   <div id="mobile-controls" aria-label="Mobile touch controls">
     <button id="fullscreen-button" type="button" aria-label="Enter fullscreen">[]</button>
@@ -173,19 +230,26 @@
     const MAP_ZIP_URL = './a5c9110e60d2_gltf.zip';
     const MAP_URL = './assets/map_replica.gltf';
     const TARGET_MAP_SIZE = 80;
-    const PLAYER_RADIUS = 0.35;
-    const PLAYER_HEIGHT = 1.8;
-    const PLAYER_SPEED = 6.0;
+    const PLAYER_SCALE = 0.5;
+    const PLAYER_RADIUS = 0.35 * PLAYER_SCALE;
+    const PLAYER_HEIGHT = 1.8 * PLAYER_SCALE;
+    const PLAYER_SPEED = 6.0 * PLAYER_SCALE;
     const RAYCAST_HEIGHT = 80;
-    const MAX_STEP_HEIGHT = 1.25;
-    const CAMERA_MIN_DISTANCE = 3.5;
-    const CAMERA_MAX_DISTANCE = 16;
+    const MAX_STEP_HEIGHT = 1.25 * PLAYER_SCALE;
+    const CAMERA_MIN_DISTANCE = 2.2;
+    const CAMERA_MAX_DISTANCE = 10;
     const MOBILE_MAX_PIXEL_RATIO = 1.5;
     const JOYSTICK_DEAD_ZONE = 0.12;
     const LOOK_SENSITIVITY_X = 0.008;
     const LOOK_SENSITIVITY_Y = 0.005;
+    const SURFACE_HALLWAY = 'hallway';
+    const SURFACE_ROOF = 'roof';
+    const ROOF_HEIGHT_RATIO = 0.58;
+    const MIN_WALKABLE_NORMAL_Y = 0.35;
 
     const statusEl = document.getElementById('status');
+    const surfaceLabelEl = document.getElementById('surface-label');
+    const surfaceModeButtons = Array.from(document.querySelectorAll('[data-surface-mode]'));
     const joystickEl = document.getElementById('joystick');
     const joystickKnobEl = document.getElementById('joystick-knob');
     const lookZoneEl = document.getElementById('look-zone');
@@ -233,10 +297,10 @@
     body.position.y = 0;
     player.add(body);
 
-    const faceGeometry = new THREE.SphereGeometry(0.08, 12, 8);
+    const faceGeometry = new THREE.SphereGeometry(0.08 * PLAYER_SCALE, 12, 8);
     const faceMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff });
     const face = new THREE.Mesh(faceGeometry, faceMaterial);
-    face.position.set(0, 0.36, PLAYER_RADIUS * 0.92);
+    face.position.set(0, PLAYER_HEIGHT * 0.2, PLAYER_RADIUS * 0.92);
     player.add(face);
 
     const fallbackGround = createFallbackGround();
@@ -252,6 +316,7 @@
     const smoothedCameraTarget = new THREE.Vector3(0, PLAYER_HEIGHT * 0.6, 0);
     const desiredCameraPosition = new THREE.Vector3();
     const joystickVector = new THREE.Vector2();
+    const hitNormal = new THREE.Vector3();
 
     const groundMeshes = [fallbackGround];
     const keys = new Set();
@@ -259,15 +324,19 @@
 
     let cameraYaw = Math.PI;
     let cameraPitch = THREE.MathUtils.degToRad(26);
-    let cameraDistance = 7;
+    let cameraDistance = 4.5;
     let joystickPointerId = null;
     let lookPointerId = null;
     let lastLookX = 0;
     let lastLookY = 0;
     let mapRoot = null;
     let mapReady = false;
+    let activeSurfaceMode = SURFACE_HALLWAY;
+    let surfaceMinY = 0;
+    let surfaceMaxY = 0;
+    let roofCutoffY = Number.POSITIVE_INFINITY;
 
-    camera.position.set(0, 5, 8);
+    camera.position.set(0, 2.5, 4.5);
     camera.lookAt(player.position);
 
     loadEnvironment();
@@ -296,6 +365,7 @@
       scene.add(mapRoot);
 
       normalizeMapToScene(mapRoot);
+      configureSurfaceClassifier(mapRoot);
       registerGroundMeshes(mapRoot);
 
       mapRoot.updateMatrixWorld(true);
@@ -303,7 +373,8 @@
       mapReady = true;
 
       placePlayerAtSpawn();
-      statusEl.textContent = 'Map loaded. Use the left thumbstick to walk and the right pad to look.';
+      updateSurfaceUi();
+      statusEl.textContent = 'Map loaded. Use Hallway mode to stay below roof geometry.';
     }
 
     async function loadMapArchive(url) {
@@ -463,6 +534,13 @@
       root.updateMatrixWorld(true);
     }
 
+    function configureSurfaceClassifier(root) {
+      const box = new THREE.Box3().setFromObject(root);
+      surfaceMinY = box.min.y;
+      surfaceMaxY = box.max.y;
+      roofCutoffY = surfaceMinY + (surfaceMaxY - surfaceMinY) * ROOF_HEIGHT_RATIO;
+    }
+
     function placePlayerOnGround(x, z) {
       const hit = findGroundAt(x, z);
 
@@ -500,14 +578,34 @@
       return null;
     }
 
-    function findGroundAt(x, z) {
+    function findGroundAt(x, z, mode = activeSurfaceMode) {
       if (groundMeshes.length === 0) return null;
 
       raycaster.set(new THREE.Vector3(x, RAYCAST_HEIGHT, z), downDirection);
       raycaster.far = RAYCAST_HEIGHT * 2;
 
       const hits = raycaster.intersectObjects(groundMeshes, false);
-      return hits.length > 0 ? hits[0] : null;
+      return selectSurfaceHit(hits, mode);
+    }
+
+    function selectSurfaceHit(hits, mode) {
+      for (const hit of hits) {
+        if (!isWalkableSurface(hit)) continue;
+
+        const isRoof = hit.point.y >= roofCutoffY;
+        if ((mode === SURFACE_ROOF && isRoof) || (mode === SURFACE_HALLWAY && !isRoof)) {
+          return hit;
+        }
+      }
+
+      return null;
+    }
+
+    function isWalkableSurface(hit) {
+      if (!hit.face) return true;
+
+      hitNormal.copy(hit.face.normal).transformDirection(hit.object.matrixWorld);
+      return hitNormal.y >= MIN_WALKABLE_NORMAL_Y;
     }
 
     function createFallbackGround() {
@@ -546,6 +644,12 @@
       window.addEventListener('keyup', (event) => {
         keys.delete(event.key.toLowerCase());
         if (isMovementKey(event.key)) event.preventDefault();
+      });
+
+      surfaceModeButtons.forEach((button) => {
+        button.addEventListener('click', () => {
+          setSurfaceMode(button.dataset.surfaceMode);
+        });
       });
 
       joystickEl.addEventListener('pointerdown', (event) => {
@@ -691,6 +795,24 @@
 
     function isMovementKey(key) {
       return ['w', 'a', 's', 'd', 'arrowup', 'arrowleft', 'arrowdown', 'arrowright'].includes(key.toLowerCase());
+    }
+
+    function setSurfaceMode(mode) {
+      if (![SURFACE_HALLWAY, SURFACE_ROOF].includes(mode) || mode === activeSurfaceMode) return;
+
+      activeSurfaceMode = mode;
+      updateSurfaceUi();
+      placePlayerAtSpawn();
+    }
+
+    function updateSurfaceUi() {
+      const label = activeSurfaceMode === SURFACE_ROOF ? 'Roof' : 'Hallway';
+      const cutoffText = Number.isFinite(roofCutoffY) ? ` cutoff ${roofCutoffY.toFixed(1)}m` : '';
+      surfaceLabelEl.textContent = `Walk layer: ${label}${cutoffText}`;
+
+      surfaceModeButtons.forEach((button) => {
+        button.classList.toggle('is-active', button.dataset.surfaceMode === activeSurfaceMode);
+      });
     }
 
     function updatePlayer(deltaTime) {
