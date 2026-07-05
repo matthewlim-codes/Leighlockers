@@ -230,13 +230,14 @@
     const MAP_ZIP_URL = './a5c9110e60d2_gltf.zip';
     const MAP_URL = './assets/map_replica.gltf';
     const TARGET_MAP_SIZE = 80;
-    const PLAYER_RADIUS = 0.35;
-    const PLAYER_HEIGHT = 1.8;
-    const PLAYER_SPEED = 6.0;
+    const PLAYER_SCALE = 0.5;
+    const PLAYER_RADIUS = 0.35 * PLAYER_SCALE;
+    const PLAYER_HEIGHT = 1.8 * PLAYER_SCALE;
+    const PLAYER_SPEED = 6.0 * PLAYER_SCALE;
     const RAYCAST_HEIGHT = 80;
-    const MAX_STEP_HEIGHT = 1.25;
-    const CAMERA_MIN_DISTANCE = 3.5;
-    const CAMERA_MAX_DISTANCE = 16;
+    const MAX_STEP_HEIGHT = 1.25 * PLAYER_SCALE;
+    const CAMERA_MIN_DISTANCE = 2.2;
+    const CAMERA_MAX_DISTANCE = 10;
     const MOBILE_MAX_PIXEL_RATIO = 1.5;
     const JOYSTICK_DEAD_ZONE = 0.12;
     const LOOK_SENSITIVITY_X = 0.008;
@@ -296,10 +297,10 @@
     body.position.y = 0;
     player.add(body);
 
-    const faceGeometry = new THREE.SphereGeometry(0.08, 12, 8);
+    const faceGeometry = new THREE.SphereGeometry(0.08 * PLAYER_SCALE, 12, 8);
     const faceMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff });
     const face = new THREE.Mesh(faceGeometry, faceMaterial);
-    face.position.set(0, 0.36, PLAYER_RADIUS * 0.92);
+    face.position.set(0, PLAYER_HEIGHT * 0.2, PLAYER_RADIUS * 0.92);
     player.add(face);
 
     const fallbackGround = createFallbackGround();
@@ -323,7 +324,7 @@
 
     let cameraYaw = Math.PI;
     let cameraPitch = THREE.MathUtils.degToRad(26);
-    let cameraDistance = 7;
+    let cameraDistance = 4.5;
     let joystickPointerId = null;
     let lookPointerId = null;
     let lastLookX = 0;
@@ -335,7 +336,7 @@
     let surfaceMaxY = 0;
     let roofCutoffY = Number.POSITIVE_INFINITY;
 
-    camera.position.set(0, 5, 8);
+    camera.position.set(0, 2.5, 4.5);
     camera.lookAt(player.position);
 
     loadEnvironment();
