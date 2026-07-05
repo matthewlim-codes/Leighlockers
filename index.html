@@ -232,14 +232,14 @@
     const MAP_ZIP_URL = './a5c9110e60d2_gltf.zip';
     const MAP_URL = './assets/map_replica.gltf';
     const TARGET_MAP_SIZE = 80;
-    const PLAYER_SCALE = 0.5;
+    const PLAYER_SCALE = 1 / 6;
     const PLAYER_RADIUS = 0.35 * PLAYER_SCALE;
     const PLAYER_HEIGHT = 1.8 * PLAYER_SCALE;
-    const PLAYER_SPEED = 6.0 * PLAYER_SCALE;
+    const PLAYER_SPEED = 2.0;
     const RAYCAST_HEIGHT = 80;
-    const MAX_STEP_HEIGHT = 1.25 * PLAYER_SCALE;
-    const CAMERA_MIN_DISTANCE = 2.2;
-    const CAMERA_MAX_DISTANCE = 10;
+    const MAX_STEP_HEIGHT = 0.35;
+    const CAMERA_MIN_DISTANCE = 1.2;
+    const CAMERA_MAX_DISTANCE = 6;
     const MOBILE_MAX_PIXEL_RATIO = 1.5;
     const JOYSTICK_DEAD_ZONE = 0.12;
     const LOOK_SENSITIVITY_X = 0.008;
@@ -249,6 +249,7 @@
     const SURFACE_ROOF = 'roof';
     const ROOF_HEIGHT_RATIO = 0.58;
     const MIN_WALKABLE_NORMAL_Y = 0.35;
+    const QUAD_SPAWN = new THREE.Vector2(-32, 8);
 
     const statusEl = document.getElementById('status');
     const surfaceLabelEl = document.getElementById('surface-label');
@@ -327,7 +328,7 @@
 
     let cameraYaw = Math.PI;
     let cameraPitch = THREE.MathUtils.degToRad(26);
-    let cameraDistance = 4.5;
+    let cameraDistance = 2.5;
     let joystickPointerId = null;
     let lookPointerId = null;
     let lastLookX = 0;
@@ -339,7 +340,7 @@
     let surfaceMaxY = 0;
     let roofCutoffY = Number.POSITIVE_INFINITY;
 
-    camera.position.set(0, 2.5, 4.5);
+    camera.position.set(0, 1.4, 2.5);
     camera.lookAt(player.position);
 
     loadEnvironment();
@@ -555,7 +556,10 @@
     }
 
     function placePlayerAtSpawn() {
-      const spawnHit = findGroundAt(0, 0) || findNearestGroundAround(0, 0);
+      const spawnHit = findGroundAt(QUAD_SPAWN.x, QUAD_SPAWN.y, SURFACE_GROUND)
+        || findNearestGroundAround(QUAD_SPAWN.x, QUAD_SPAWN.y)
+        || findGroundAt(0, 0, SURFACE_GROUND)
+        || findNearestGroundAround(0, 0);
 
       if (spawnHit) {
         player.position.set(spawnHit.point.x, spawnHit.point.y + PLAYER_HEIGHT / 2, spawnHit.point.z);
