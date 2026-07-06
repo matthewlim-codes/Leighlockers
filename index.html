@@ -3,6 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta http-equiv="Cache-Control" content="no-store, max-age=0">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
   <title>Mobile 3D Map Walkthrough</title>
   <style>
     html,
@@ -46,6 +49,13 @@
       margin-top: 6px;
       color: #9ec8ff;
       font-size: clamp(11px, 3vw, 13px);
+    }
+
+    #build-tag {
+      margin-top: 4px;
+      color: #9dffb5;
+      font-size: clamp(10px, 2.8vw, 12px);
+      font-weight: 700;
     }
 
     #surface-panel {
@@ -200,6 +210,7 @@
     Right touch pad: look around<br>
     Scan: blueprint + low-poly buildings
     <div id="status">Loading uploaded GLTF ZIP...</div>
+    <div id="build-tag">Build: low-poly blueprint v2</div>
   </div>
   <div id="surface-panel" aria-label="Walkable surface selector">
     <div id="surface-label">Walk layer: Ground</div>
@@ -230,7 +241,8 @@
     import * as THREE from 'three';
     import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
-    const MAP_ZIP_URL = './a5c9110e60d2_gltf.zip';
+    const APP_VERSION = 'low-poly-blueprint-v2';
+    const MAP_ZIP_URL = `./a5c9110e60d2_gltf.zip?v=${APP_VERSION}`;
     const MAP_URL = './assets/map_replica.gltf';
     const TARGET_MAP_SIZE = 80;
     const PLAYER_SCALE = 1 / 6;
