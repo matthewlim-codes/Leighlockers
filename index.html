@@ -256,6 +256,9 @@
     const LOW_POLY_MIN_HIGH_POINTS_PER_CELL = 8;
     const LOW_POLY_MIN_BUILDING_HEIGHT = 0.8;
     const LOW_POLY_MAX_BUILDING_HEIGHT = 8;
+    const BLUEPRINT_GRID_SIZE = 2.4;
+    const BLUEPRINT_GROUND_HEIGHT_RATIO = 0.22;
+    const BLUEPRINT_MIN_POINTS_PER_CELL = 4;
 
     const statusEl = document.getElementById('status');
     const surfaceLabelEl = document.getElementById('surface-label');
@@ -341,6 +344,7 @@
     let lastLookX = 0;
     let lastLookY = 0;
     let mapRoot = null;
+    let blueprintRoot = null;
     let lowPolyRoot = null;
     let mapReady = false;
     let activeSurfaceMode = SURFACE_GROUND;
@@ -380,7 +384,9 @@
       configureSurfaceClassifier(mapRoot);
       registerGroundMeshes(mapRoot);
       applyBlueprintMaterial(mapRoot);
+      blueprintRoot = createGroundBlueprint(mapRoot);
       lowPolyRoot = createLowPolyLayout(mapRoot);
+      scene.add(blueprintRoot);
       scene.add(lowPolyRoot);
 
       mapRoot.updateMatrixWorld(true);
@@ -389,7 +395,7 @@
 
       placePlayerAtSpawn();
       updateSurfaceUi();
-      statusEl.textContent = 'Low-poly map loaded over blueprint scan.';
+      statusEl.textContent = 'LOW-POLY MODE ACTIVE: scan is only a blueprint.';
     }
 
     async function loadMapArchive(url) {
@@ -533,9 +539,9 @@
 
     function applyBlueprintMaterial(root) {
       const blueprintMaterial = new THREE.MeshBasicMaterial({
-        color: 0x7cc7ff,
+        color: 0x0e3d67,
         transparent: true,
-        opacity: 0.22,
+        opacity: 0.06,
         wireframe: true,
         depthWrite: false
       });
@@ -548,22 +554,96 @@
       });
     }
 
+    function createGroundBlueprint(root) {
+      const blueprint = new THREE.Group();
+      blueprint.name = 'Generated flat ground blueprint';
+      blueprint.renderOrder = 2;
+
+      const bounds = new THREE.Box3().setFromObject(root);
+      const maxGroundY = surfaceMinY + (surfaceMaxY - surfaceMinY) * BLUEPRINT_GROUND_HEIGHT_RATIO;
+      const cells = collectBlueprintCells(root, bounds, maxGroundY);
+      const selectedCells = Array.from(cells.values()).filter((cell) => cell.pointCount >= BLUEPRINT_MIN_POINTS_PER_CELL);
+      const tileGeometry = new THREE.PlaneGeometry(BLUEPRINT_GRID_SIZE * 0.94, BLUEPRINT_GRID_SIZE * 0.94);
+      tileGeometry.rotateX(-Math.PI / 2);
+      const tileMaterial = new THREE.MeshBasicMaterial({
+        color: 0x2f9bff,
+        transparent: true,
+        opacity: 0.26,
+        side: THREE.DoubleSide,
+        depthWrite: false
+      });
+      const tileMesh = new THREE.InstancedMesh(tileGeometry, tileMaterial, selectedCells.length);
+      const matrix = new THREE.Matrix4();
+
+      selectedCells.forEach((cell, index) => {
+        const centerX = bounds.min.x + (cell.xIndex + 0.5) * BLUEPRINT_GRID_SIZE;
+        const centerZ = bounds.min.z + (cell.zIndex + 0.5) * BLUEPRINT_GRID_SIZE;
+
+        matrix.makeTranslation(centerX, surfaceMinY + 0.035, centerZ);
+        tileMesh.setMatrixAt(index, matrix);
+      });
+
+      tileMesh.instanceMatrix.needsUpdate = true;
+      blueprint.add(tileMesh);
+
+      const grid = new THREE.GridHelper(TARGET_MAP_SIZE, 32, 0x66c2ff, 0x1c6a9d);
+      grid.position.y = surfaceMinY + 0.05;
+      grid.material.transparent = true;
+      grid.material.opacity = 0.34;
+      blueprint.add(grid);
+
+      return blueprint;
+    }
+
+    function collectBlueprintCells(root, bounds, maxGroundY) {
+      const cells = new Map();
+
+      root.updateMatrixWorld(true);
+      root.traverse((object) => {
+        if (!object.isMesh || !object.geometry?.attributes?.position) return;
+
+        const positions = object.geometry.attributes.position;
+        const sampleStep = Math.max(1, Math.floor(positions.count / 3500));
+
+        for (let index = 0; index < positions.count; index += sampleStep) {
+          sampledPoint.fromBufferAttribute(positions, index);
+          object.localToWorld(sampledPoint);
+
+          if (sampledPoint.y > maxGroundY) continue;
+
+          const xIndex = Math.floor((sampledPoint.x - bounds.min.x) / BLUEPRINT_GRID_SIZE);
+          const zIndex = Math.floor((sampledPoint.z - bounds.min.z) / BLUEPRINT_GRID_SIZE);
+          const key = `${xIndex}:${zIndex}`;
+          let cell = cells.get(key);
+
+          if (!cell) {
+            cell = { xIndex, zIndex, pointCount: 0 };
+            cells.set(key, cell);
+          }
+
+          cell.pointCount += 1;
+        }
+      });
+
+      return cells;
+    }
+
     function createLowPolyLayout(root) {
       const layout = new THREE.Group();
       layout.name = 'Generated low-poly campus layout';
-      layout.renderOrder = 2;
+      layout.renderOrder = 3;
 
       const bounds = new THREE.Box3().setFromObject(root);
       const heightRange = Math.max(surfaceMaxY - surfaceMinY, 1);
       const buildingThresholdY = surfaceMinY + heightRange * LOW_POLY_BUILDING_HEIGHT_RATIO;
       const cells = collectHeightCells(root, bounds, buildingThresholdY);
       const buildingMaterial = new THREE.MeshStandardMaterial({
-        color: 0xc8aa7a,
+        color: 0xd7a75e,
         roughness: 0.82,
         metalness: 0.02
       });
       const roofMaterial = new THREE.MeshStandardMaterial({
-        color: 0xe6ddc9,
+        color: 0xfff1cf,
         roughness: 0.9,
         metalness: 0.01
       });
